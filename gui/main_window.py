@@ -5,19 +5,19 @@ Sidebar (watchlist + fetch controls) | Clips table | Detail pane
 """
 
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Slot
-from PySide6.QtGui import QAction, QFont, QIcon
+from PySide6.QtCore import Qt, QTimer, QDateTime, Slot
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
-    QDockWidget,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -30,8 +30,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
-    QStatusBar,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -122,7 +120,7 @@ QPushButton#btn_danger {
     color: #e07070;
 }
 QPushButton#btn_danger:hover { background-color: #4d2020; }
-QLineEdit, QSpinBox, QComboBox {
+QLineEdit, QSpinBox, QComboBox, QDateTimeEdit {
     background-color: #201f1d;
     border: 1px solid #393836;
     border-radius: 5px;
@@ -130,7 +128,7 @@ QLineEdit, QSpinBox, QComboBox {
     color: #cdccca;
     selection-background-color: #01696f;
 }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QDateTimeEdit:focus {
     border-color: #4f98a3;
 }
 QComboBox::drop-down { border: none; width: 20px; }
@@ -138,6 +136,11 @@ QComboBox QAbstractItemView {
     background: #201f1d;
     border: 1px solid #393836;
     selection-background-color: #01696f;
+}
+QDateTimeEdit::up-button, QDateTimeEdit::down-button {
+    width: 16px;
+    border: none;
+    background: #2d2c2a;
 }
 QListWidget {
     background-color: #201f1d;
@@ -186,6 +189,67 @@ QHeaderView::section {
 """
 
 
+# ---------------------------------------------------------------------------
+# Custom date-range dialog
+# ---------------------------------------------------------------------------
+
+class CustomDateRangeDialog(QDialog):
+    """Dialog for picking a custom start/end datetime for clip fetching."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Custom Date Range")
+        self.setMinimumWidth(340)
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+        now = QDateTime.currentDateTimeUtc()
+
+        self.start_edit = QDateTimeEdit(now.addDays(-7))
+        self.start_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.start_edit.setCalendarPopup(True)
+        self.start_edit.setToolTip("Start of date range (UTC)")
+
+        self.end_edit = QDateTimeEdit(now)
+        self.end_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.end_edit.setCalendarPopup(True)
+        self.end_edit.setToolTip("End of date range (UTC)")
+
+        form.addRow("Start (UTC):", self.start_edit)
+        form.addRow("End (UTC):", self.end_edit)
+        layout.addLayout(form)
+
+        hint = QLabel("Dates are interpreted as UTC.")
+        hint.setStyleSheet("color: #797876; font-size: 11px;")
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _validate(self) -> None:
+        if self.start_edit.dateTime() >= self.end_edit.dateTime():
+            QMessageBox.warning(self, "Invalid range", "Start must be before End.")
+            return
+        self.accept()
+
+    def get_range(self) -> tuple[datetime, datetime]:
+        """Return (started_at, ended_at) as UTC-aware datetimes."""
+        def _to_utc(qdt: QDateTime) -> datetime:
+            ts = qdt.toSecsSinceEpoch()
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+        return _to_utc(self.start_edit.dateTime()), _to_utc(self.end_edit.dateTime())
+
+
+# ---------------------------------------------------------------------------
+# Credentials dialog
+# ---------------------------------------------------------------------------
+
 class CredentialsDialog(QDialog):
     """Simple dialog for entering Twitch Client ID and Secret."""
 
@@ -231,14 +295,21 @@ class CredentialsDialog(QDialog):
         self.accept()
 
 
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+
 class SidebarWidget(QWidget):
     """Left sidebar: watchlist manager + fetch controls."""
-
-    fetch_requested = None  # will be replaced with a Signal from MainWindow
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFixedWidth(260)
+
+        # Custom date range stored after dialog confirmation
+        self._custom_started_at: Optional[datetime] = None
+        self._custom_ended_at: Optional[datetime] = None
+
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(10)
@@ -271,9 +342,17 @@ class SidebarWidget(QWidget):
         fetch_layout.setSpacing(6)
 
         self.time_combo = QComboBox()
-        self.time_combo.addItems(["Last 24 hours", "Last 7 days", "Last 30 days", "Custom"])
+        self.time_combo.addItems(["Last 24 hours", "Last 7 days", "Last 30 days", "Custom…"])
         self.time_combo.setCurrentIndex(1)
+        self.time_combo.currentIndexChanged.connect(self._on_time_combo_changed)
         fetch_layout.addRow("Time range:", self.time_combo)
+
+        # Label shown when custom range is active
+        self.custom_range_label = QLabel("")
+        self.custom_range_label.setStyleSheet("color: #4f98a3; font-size: 11px;")
+        self.custom_range_label.setWordWrap(True)
+        self.custom_range_label.setVisible(False)
+        fetch_layout.addRow("", self.custom_range_label)
 
         self.min_views_spin = QSpinBox()
         self.min_views_spin.setRange(0, 1_000_000)
@@ -290,6 +369,10 @@ class SidebarWidget(QWidget):
         self.lang_edit = QLineEdit()
         self.lang_edit.setPlaceholderText("e.g. en, de (optional)")
         self.lang_edit.setMaxLength(5)
+        self.lang_edit.setToolTip(
+            "Filter clips by language code (ISO 639-1).\n"
+            "Leave blank to fetch all languages."
+        )
         fetch_layout.addRow("Language:", self.lang_edit)
 
         root.addWidget(fetch_group)
@@ -350,8 +433,14 @@ class SidebarWidget(QWidget):
         self._refresh_watchlist()
 
     # ------------------------------------------------------------------
+    # Watchlist helpers
+    # ------------------------------------------------------------------
+
     def _refresh_watchlist(self) -> None:
         self.wl_list.clear()
+        self.wl_list.itemChanged.disconnect() if self.wl_list.receivers(
+            self.wl_list.itemChanged
+        ) else None
         for entry in watchlist.get_entries():
             label = f"[{entry['source_type'][0].upper()}] {entry['display_name']}"
             item = QListWidgetItem(label)
@@ -374,7 +463,6 @@ class SidebarWidget(QWidget):
         )
         if ok and text.strip():
             val = text.strip()
-            # If numeric treat as ID, otherwise look up
             if not val.isdigit():
                 from twitch_api import twitch
                 gid = twitch.get_game_id(val)
@@ -387,13 +475,49 @@ class SidebarWidget(QWidget):
             self._refresh_watchlist()
 
     def _add_broadcaster(self) -> None:
+        """
+        Ask for a Twitch login name, resolve it to a broadcaster ID via the
+        Twitch API, then save the ID (not the raw login string) to the watchlist.
+        """
         from PySide6.QtWidgets import QInputDialog
+        from twitch_api import twitch, TwitchAuthError, TwitchAPIError
+
         login, ok = QInputDialog.getText(
             self, "Add Streamer", "Enter Twitch login name (e.g. s1mple):"
         )
-        if ok and login.strip():
-            watchlist.add_broadcaster(login.strip().lower(), display_name=login.strip())
-            self._refresh_watchlist()
+        if not ok or not login.strip():
+            return
+
+        login = login.strip().lower()
+
+        # Check credentials before attempting lookup
+        if not cfg.has_credentials():
+            QMessageBox.warning(
+                self,
+                "No credentials",
+                "Please set your Twitch credentials first (toolbar ⚙ Credentials).",
+            )
+            return
+
+        try:
+            broadcaster_id = twitch.get_broadcaster_id(login)
+        except (TwitchAuthError, TwitchAPIError) as exc:
+            QMessageBox.critical(
+                self, "API error", f"Could not look up broadcaster:\n{exc}"
+            )
+            return
+
+        if not broadcaster_id:
+            QMessageBox.warning(
+                self,
+                "Streamer not found",
+                f"No Twitch channel found for login: "{login}"\n"
+                "Check the spelling and try again.",
+            )
+            return
+
+        watchlist.add_broadcaster(broadcaster_id, display_name=login)
+        self._refresh_watchlist()
 
     def _remove_entry(self) -> None:
         item = self.wl_list.currentItem()
@@ -410,10 +534,55 @@ class SidebarWidget(QWidget):
             watchlist.stop_auto_refresh()
 
     # ------------------------------------------------------------------
+    # Custom date range
+    # ------------------------------------------------------------------
+
+    def _on_time_combo_changed(self, index: int) -> None:
+        """Open the date-range picker when 'Custom…' is selected."""
+        CUSTOM_INDEX = 3
+        if index != CUSTOM_INDEX:
+            # Reset any stored custom range when switching away
+            self._custom_started_at = None
+            self._custom_ended_at = None
+            self.custom_range_label.setVisible(False)
+            return
+
+        dlg = CustomDateRangeDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._custom_started_at, self._custom_ended_at = dlg.get_range()
+            self.custom_range_label.setText(
+                f"{self._custom_started_at.strftime('%Y-%m-%d %H:%M')} →\n"
+                f"{self._custom_ended_at.strftime('%Y-%m-%d %H:%M')} UTC"
+            )
+            self.custom_range_label.setVisible(True)
+        else:
+            # User cancelled — revert combo to previous preset (Last 7 days)
+            self.time_combo.blockSignals(True)
+            self.time_combo.setCurrentIndex(1)
+            self.time_combo.blockSignals(False)
+            self.custom_range_label.setVisible(False)
+
+    # ------------------------------------------------------------------
+    # Properties consumed by MainWindow._fetch_now
+    # ------------------------------------------------------------------
+
     @property
     def fetch_days(self) -> int:
-        mapping = {0: 1, 1: 7, 2: 30, 3: 7}
+        """Days for preset time ranges. Not used when custom range is active."""
+        mapping = {0: 1, 1: 7, 2: 30}
         return mapping.get(self.time_combo.currentIndex(), 7)
+
+    @property
+    def is_custom_range(self) -> bool:
+        return self.time_combo.currentIndex() == 3
+
+    @property
+    def custom_started_at(self) -> Optional[datetime]:
+        return self._custom_started_at
+
+    @property
+    def custom_ended_at(self) -> Optional[datetime]:
+        return self._custom_ended_at
 
     @property
     def min_views(self) -> int:
@@ -425,9 +594,14 @@ class SidebarWidget(QWidget):
 
     @property
     def language(self) -> Optional[str]:
+        """ISO 639-1 language code from the language field, or None if blank."""
         v = self.lang_edit.text().strip()
         return v if v else None
 
+
+# ---------------------------------------------------------------------------
+# Main window
+# ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
     """Top-level application window."""
@@ -457,12 +631,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_toolbar(self) -> None:
-        tb = QToolBar("Main toolbar")
+        from PySide6.QtCore import Qt
+        tb = self.addToolBar("Main toolbar")
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.addToolBar(tb)
 
-        # SVG-free text icons using unicode
         self.act_fetch = QAction("▶  Fetch Now", self)
         self.act_fetch.setToolTip("Fetch clips from all enabled watchlist sources")
         self.act_fetch.triggered.connect(self._fetch_now)
@@ -491,22 +664,20 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_settings)
 
     def _build_central(self) -> None:
+        from PySide6.QtCore import Qt
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(1)
 
-        # Sidebar
         self.sidebar = SidebarWidget()
         self.sidebar.btn_fetch.clicked.connect(self._fetch_now)
         self.sidebar.status_filter.currentIndexChanged.connect(self._reload_table)
         self.sidebar.search_edit.textChanged.connect(self._reload_table)
         splitter.addWidget(self.sidebar)
 
-        # Centre: clips table
         self.clips_table = ClipsTable()
         self.clips_table.clip_selected.connect(self._on_clip_selected)
         splitter.addWidget(self.clips_table)
 
-        # Right: detail pane
         self.detail_pane = DetailPane()
         self.detail_pane.status_changed.connect(self._on_status_changed)
         self.detail_pane.notes_saved.connect(self._on_notes_saved)
@@ -540,7 +711,7 @@ class MainWindow(QMainWindow):
         if not cfg.has_credentials():
             QMessageBox.warning(
                 self, "No credentials",
-                "Please set your Twitch credentials first (toolbar \u2699 Credentials)."
+                "Please set your Twitch credentials first (toolbar ⚙ Credentials)."
             )
             return
 
@@ -560,14 +731,26 @@ class MainWindow(QMainWindow):
         game_ids = [e["source_value"] for e in entries if e["source_type"] == "game"]
         logins   = [e["source_value"] for e in entries if e["source_type"] == "broadcaster"]
 
-        # Launch one thread covering game + broadcaster logins
+        # Resolve date range — use custom if set, otherwise derive from preset
+        if sb.is_custom_range and sb.custom_started_at and sb.custom_ended_at:
+            started_at = sb.custom_started_at
+            ended_at = sb.custom_ended_at
+        else:
+            started_at = datetime.now(timezone.utc) - timedelta(days=sb.fetch_days)
+            ended_at = None  # open-ended (up to now)
+
+        # language: pass the value from the sidebar (None = no filter)
+        language = sb.language
+
         self._fetch_thread = FetchThread(
             game_id=game_ids[0] if game_ids else None,
             broadcaster_logins=logins,
             days=sb.fetch_days,
+            started_at=started_at,
+            ended_at=ended_at,
             max_results=sb.max_results,
             min_views=sb.min_views,
-            language=sb.language,
+            language=language,
         )
         self._fetch_thread.worker.progress.connect(self._on_progress)
         self._fetch_thread.worker.finished.connect(self._on_fetch_finished)
@@ -578,7 +761,13 @@ class MainWindow(QMainWindow):
 
         self.act_fetch.setEnabled(False)
         self.act_cancel.setEnabled(True)
-        self._status_label.setText("Fetching clips…")
+        range_desc = (
+            f"{started_at.strftime('%Y-%m-%d')} → {ended_at.strftime('%Y-%m-%d')}"
+            if ended_at
+            else f"last {sb.fetch_days}d"
+        )
+        lang_desc = f" · lang={language}" if language else ""
+        self._status_label.setText(f"Fetching clips… ({range_desc}{lang_desc})")
 
     def _cancel_fetch(self) -> None:
         if self._fetch_thread:
@@ -639,7 +828,6 @@ class MainWindow(QMainWindow):
             order_by="score",
             limit=500,
         )
-        # Client-side title search
         if search:
             clips = [
                 c for c in clips
