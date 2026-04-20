@@ -342,7 +342,7 @@ class SidebarWidget(QWidget):
         fetch_layout.setSpacing(6)
 
         self.time_combo = QComboBox()
-        self.time_combo.addItems(["Last 24 hours", "Last 7 days", "Last 30 days", "Custom…"])
+        self.time_combo.addItems(["Last 24 hours", "Last 7 days", "Last 30 days", "Custom\u2026"])
         self.time_combo.setCurrentIndex(1)
         self.time_combo.currentIndexChanged.connect(self._on_time_combo_changed)
         fetch_layout.addRow("Time range:", self.time_combo)
@@ -389,7 +389,7 @@ class SidebarWidget(QWidget):
         filter_layout.addRow("Status:", self.status_filter)
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Title / streamer…")
+        self.search_edit.setPlaceholderText("Title / streamer\u2026")
         self.search_edit.setClearButtonEnabled(True)
         filter_layout.addRow("Search:", self.search_edit)
 
@@ -417,7 +417,7 @@ class SidebarWidget(QWidget):
         root.addStretch()
 
         # --- Fetch button ---
-        self.btn_fetch = QPushButton("▶  Fetch Clips")
+        self.btn_fetch = QPushButton("\u25b6  Fetch Clips")
         self.btn_fetch.setObjectName("btn_primary")
         self.btn_fetch.setFixedHeight(36)
         root.addWidget(self.btn_fetch)
@@ -495,7 +495,7 @@ class SidebarWidget(QWidget):
             QMessageBox.warning(
                 self,
                 "No credentials",
-                "Please set your Twitch credentials first (toolbar ⚙ Credentials).",
+                "Please set your Twitch credentials first (toolbar \u2699 Credentials).",
             )
             return
 
@@ -511,7 +511,7 @@ class SidebarWidget(QWidget):
             QMessageBox.warning(
                 self,
                 "Streamer not found",
-                f"No Twitch channel found for login: "{login}"\n"
+                f"No Twitch channel found for login: \"{login}\"\n"
                 "Check the spelling and try again.",
             )
             return
@@ -538,7 +538,7 @@ class SidebarWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _on_time_combo_changed(self, index: int) -> None:
-        """Open the date-range picker when 'Custom…' is selected."""
+        """Open the date-range picker when 'Custom\u2026' is selected."""
         CUSTOM_INDEX = 3
         if index != CUSTOM_INDEX:
             # Reset any stored custom range when switching away
@@ -551,7 +551,7 @@ class SidebarWidget(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._custom_started_at, self._custom_ended_at = dlg.get_range()
             self.custom_range_label.setText(
-                f"{self._custom_started_at.strftime('%Y-%m-%d %H:%M')} →\n"
+                f"{self._custom_started_at.strftime('%Y-%m-%d %H:%M')} \u2192\n"
                 f"{self._custom_ended_at.strftime('%Y-%m-%d %H:%M')} UTC"
             )
             self.custom_range_label.setVisible(True)
@@ -636,12 +636,12 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
 
-        self.act_fetch = QAction("▶  Fetch Now", self)
+        self.act_fetch = QAction("\u25b6  Fetch Now", self)
         self.act_fetch.setToolTip("Fetch clips from all enabled watchlist sources")
         self.act_fetch.triggered.connect(self._fetch_now)
         tb.addAction(self.act_fetch)
 
-        self.act_cancel = QAction("■  Cancel", self)
+        self.act_cancel = QAction("\u25a0  Cancel", self)
         self.act_cancel.setToolTip("Cancel current fetch")
         self.act_cancel.setEnabled(False)
         self.act_cancel.triggered.connect(self._cancel_fetch)
@@ -649,17 +649,17 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        self.act_export_csv = QAction("↓  Export CSV", self)
+        self.act_export_csv = QAction("\u2193  Export CSV", self)
         self.act_export_csv.triggered.connect(self._export_csv)
         tb.addAction(self.act_export_csv)
 
-        self.act_export_json = QAction("↓  Export JSON", self)
+        self.act_export_json = QAction("\u2193  Export JSON", self)
         self.act_export_json.triggered.connect(self._export_json)
         tb.addAction(self.act_export_json)
 
         tb.addSeparator()
 
-        self.act_settings = QAction("⚙  Credentials", self)
+        self.act_settings = QAction("\u2699  Credentials", self)
         self.act_settings.triggered.connect(self._open_credentials)
         tb.addAction(self.act_settings)
 
@@ -711,7 +711,7 @@ class MainWindow(QMainWindow):
         if not cfg.has_credentials():
             QMessageBox.warning(
                 self, "No credentials",
-                "Please set your Twitch credentials first (toolbar ⚙ Credentials)."
+                "Please set your Twitch credentials first (toolbar \u2699 Credentials)."
             )
             return
 
@@ -762,17 +762,17 @@ class MainWindow(QMainWindow):
         self.act_fetch.setEnabled(False)
         self.act_cancel.setEnabled(True)
         range_desc = (
-            f"{started_at.strftime('%Y-%m-%d')} → {ended_at.strftime('%Y-%m-%d')}"
+            f"{started_at.strftime('%Y-%m-%d')} \u2192 {ended_at.strftime('%Y-%m-%d')}"
             if ended_at
             else f"last {sb.fetch_days}d"
         )
-        lang_desc = f" · lang={language}" if language else ""
-        self._status_label.setText(f"Fetching clips… ({range_desc}{lang_desc})")
+        lang_desc = f" \u00b7 lang={language}" if language else ""
+        self._status_label.setText(f"Fetching clips\u2026 ({range_desc}{lang_desc})")
 
     def _cancel_fetch(self) -> None:
         if self._fetch_thread:
             self._fetch_thread.cancel()
-        self._status_label.setText("Cancelling…")
+        self._status_label.setText("Cancelling\u2026")
 
     # ------------------------------------------------------------------
     # Slots
@@ -785,7 +785,7 @@ class MainWindow(QMainWindow):
     @Slot(int, int)
     def _on_fetch_finished(self, inserted: int, skipped: int) -> None:
         self._status_label.setText(
-            f"Done — {inserted} new clip(s) saved, {skipped} duplicate(s) skipped."
+            f"Done \u2014 {inserted} new clip(s) saved, {skipped} duplicate(s) skipped."
         )
         self._reload_table()
         self._update_stats()
@@ -844,7 +844,7 @@ class MainWindow(QMainWindow):
             n = by_s.get(s, 0)
             if n:
                 parts.append(f"{s.capitalize()}: {n}")
-        self._stats_label.setText("  ·  ".join(parts))
+        self._stats_label.setText("  \u00b7  ".join(parts))
 
     # ------------------------------------------------------------------
     # Export
