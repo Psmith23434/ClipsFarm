@@ -20,7 +20,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from config import cfg
-from database import db
+from database import db  # noqa: F401 — imported to trigger schema init via singleton
 from gui.main_window import MainWindow
 
 
@@ -40,8 +40,8 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Starting %s v%s", cfg.APP_NAME, cfg.APP_VERSION)
 
-    # Init DB (creates tables if needed)
-    db.init()
+    # DB schema is initialised automatically when the `db` singleton is
+    # imported above — no explicit init() call needed or available.
 
     app = QApplication(sys.argv)
     app.setApplicationName(cfg.APP_NAME)
